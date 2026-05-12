@@ -17,11 +17,11 @@ public class Main {
             var hwndClient = new HwndSachsenClient(1);
             List<WaterLevel> levels = hwndClient.fetchCurrentLevels();
 
-            System.out.printf("✅ %d Messwerte abgerufen%n", levels.size());
+            System.out.printf(" %d Messwerte abgerufen%n", levels.size());
 
             // In DB speichern
             db.insertWaterLevels(levels);
-            System.out.println("✅ Daten in PostgreSQL gespeichert");
+            System.out.println(" Daten in PostgreSQL gespeichert");
 
         } catch (Exception e) {
             System.err.println("❌ Fehler: " + e.getMessage());
