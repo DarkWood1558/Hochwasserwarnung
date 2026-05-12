@@ -79,3 +79,21 @@ INSERT INTO stations (name, country, river, latitude, longitude, km_to_goerlitz)
     ('Zittau',         'DE', 'Neisse', 50.8965, 14.8076, 35.0),
     ('Hradek nad Nisou','CZ', 'Nisa',  50.8600, 14.8400, 40.0),
     ('Liberec',        'CZ', 'Nisa',  50.7671, 15.0562, 80.0);
+
+-- Vorhersage-Tabelle
+CREATE TABLE predictions (
+    prediction_id    SERIAL PRIMARY KEY,
+    station_id       INT REFERENCES stations(station_id),
+    for_date         DATE NOT NULL,
+    predicted_at     TIMESTAMPTZ DEFAULT NOW(),
+    risk_level       VARCHAR(20),  -- 'NORMAL', 'ERHOHT', 'GEFAHR'
+    p_normal         DOUBLE PRECISION,
+    p_erhoht         DOUBLE PRECISION,
+    p_gefahr         DOUBLE PRECISION,
+    level_6h_cm      DOUBLE PRECISION,
+    level_12h_cm     DOUBLE PRECISION,
+    level_24h_cm     DOUBLE PRECISION,
+    travel_hours     DOUBLE PRECISION,
+    is_anomaly       BOOLEAN DEFAULT FALSE,
+    high_confidence  BOOLEAN DEFAULT TRUE
+);

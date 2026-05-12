@@ -34,9 +34,9 @@ import java.util.regex.Pattern;
  */
 public class ChmiClient {
 
-    // Hrádek nad Nisou – Lausitzer Neiße
+    // Hrádek nad Nisou – Lausitzer Neiße (Aktualisierte URL)
     private static final String HRADEK_URL =
-            "https://hydro.chmi.cz/hpps/popup_hpps_pr498.html?seq=153190010";
+            "https://hydro.chmi.cz/hpps/hpps_pru_graf.php?p_id=307338";
 
     // Alternativ: Liberec (weiter upstream, ~80 km von Görlitz)
     private static final String LIBEREC_URL =

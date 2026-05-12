@@ -51,7 +51,7 @@ def get_connection():
         port=os.getenv("DB_PORT", "5432"),
         dbname=os.getenv("DB_NAME", "hochwasser"),
         user=os.getenv("DB_USER", "postgres"),
-        password=os.getenv("DB_PASSWORD", "postgres"),
+        password=os.getenv("DB_PASSWORD", "password"),
     )
 
 @st.cache_data(ttl=300)  # 5 Minuten Cache

@@ -34,6 +34,29 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
+    public void insertPrecipitation(List<WaterLevel> rainfall) throws SQLException {
+        String sql = """
+            INSERT INTO precipitation (station_id, measured_at, rainfall_mm)
+            VALUES (?, ?, ?)
+            ON CONFLICT (station_id, measured_at) DO UPDATE SET rainfall_mm = EXCLUDED.rainfall_mm
+            """;
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            for (WaterLevel wl : rainfall) {
+                ps.setInt(1, wl.stationId());
+                ps.setTimestamp(2, Timestamp.from(wl.measuredAt()));
+                ps.setDouble(3, wl.levelCm()); // rainfall_mm is stored in levelCm in the record
+                ps.addBatch();
+            }
+            ps.executeBatch();
+            connection.commit();
+        }
+    }
+
+    public Connection getConnection() {
+        return connection;
+    }
+
     @Override
     public void close() throws SQLException {
         if (connection != null && !connection.isClosed()) {

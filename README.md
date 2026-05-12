@@ -69,10 +69,16 @@ Verwenden Sie Maven, um das Projekt zu bauen:
 mvn clean install
 ```
 
-Starten Sie die Anwendung über die `Main`-Klasse:
+Starten Sie die Anwendung über die Profile in der `pom.xml`:
 
+**Daten-Ingest (Aktuelle Pegel abrufen):**
 ```bash
-mvn exec:java -Dexec.mainClass="de.hochwasser.Main"
+mvn exec:java -Pingest
+```
+
+**Training des FloodPredictors (Inkl. Seed der historischen Daten):**
+```bash
+mvn exec:java -Ptrain
 ```
 
 ## Datenbank-Schema Highlights
