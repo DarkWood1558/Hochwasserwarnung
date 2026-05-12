@@ -1,155 +1,280 @@
 package de.hochwasser.analysis;
 
-import de.hochwasser.model.DailyProfile;
+import de.hochwasser.analysis.WaterLevelRegressor.LevelForecast;
+import de.hochwasser.analysis.WaterLevelRegressor.RegressionSample;
 import de.hochwasser.analysis.CrossValidator.CrossValidationResult;
+import de.hochwasser.model.DailyProfile;
 
 /**
- * Orchestriert das gesamte ML-Pipeline für die Hochwasser-Frühwarnung.
+ * Zentrale ML-Pipeline: orchestriert alle Modelle und liefert ein
+ * umfassendes Vorhersage-Ergebnis aus einem einzigen Aufruf.
  *
- * Workflow:
- *   1. train(historicalProfiles)
- *      a) K-Means clustert die Historien-Daten → automatische Profil-Erkennung
- *      b) Naive Bayes trainiert auf denselben Daten → Wahrscheinlichkeits-Modell
- *      c) Cross-Validation bewertet die Modellgüte
+ * ── Modelle ──────────────────────────────────────────────────────────────────
+ *  1. KMeansClusterer        Unsupervised: Cluster-Zugehörigkeit (DM1)
+ *  2. NaiveBayesPredictor    Supervised:  Risikoklasse + Wahrscheinlichkeit (DM1)
+ *  3. CrossValidator         Evaluation:  Modellgüte (DM1)
+ *  4. WaveTravelTimeModel    Zeitreihe:   Wellen-Laufzeit CZ→DE (DM1 + ADBC2)
+ *  5. WaterLevelRegressor    Regression:  Pegelstand in 6h/12h/24h (DM1)
+ *  6. DbscanAnomalyDetector  Clustering:  Anomalie-Flagging (DM1)
+ *  7. BayesianNetwork        Kausal:      P(Risiko | Ursachen) (DM1)
  *
- *   2. assessRisk(currentProfile)
- *      → Kombiniert K-Means (Cluster-Zugehörigkeit) und Naive Bayes (Wahrscheinlichkeit)
- *      → Gibt RiskLevel + Wahrscheinlichkeiten zurück
+ * ── Ensemble-Entscheidung ────────────────────────────────────────────────────
+ * Jedes Modell liefert eine Risikoeinschätzung. Die finale Entscheidung
+ * wird durch gewichtetes Voting getroffen:
+ *
+ *   BayesNet   → Gewicht 3  (kausales Modell, höchste Aussagekraft)
+ *   NaiveBayes → Gewicht 2
+ *   KMeans     → Gewicht 1
+ *
+ * Bei erkannter Anomalie (DBSCAN) wird das Risikolevel mindestens auf
+ * ERHOHT angehoben – unbekannte Ereignisse sind immer verdächtig.
  */
 public class FloodPredictor {
 
-    public enum RiskLevel {
-        NORMAL,
-        ERHOHT,
-        GEFAHR
-    }
+    // ── Risikoklassen ─────────────────────────────────────────────────────────
 
-    private final KMeansClusterer kmeans;
-    private final NaiveBayesPredictor naiveBayes;
-    private final CrossValidator crossValidator;
+    public enum RiskLevel { NORMAL, ERHOHT, GEFAHR }
 
-    private boolean trained = false;
+    // ── Modelle ───────────────────────────────────────────────────────────────
 
-    public FloodPredictor() {
-        this.kmeans         = new KMeansClusterer(3, 200, 42L);
-        this.naiveBayes     = new NaiveBayesPredictor();
-        this.crossValidator = new CrossValidator(5, 42L);
-    }
+    private final KMeansClusterer        kmeans     = new KMeansClusterer(3, 200, 42L);
+    private final NaiveBayesPredictor    naiveBayes = new NaiveBayesPredictor();
+    private final CrossValidator         crossVal   = new CrossValidator(5, 42L);
+    private final WaveTravelTimeModel    travelTime = new WaveTravelTimeModel();
+    private final WaterLevelRegressor    regressor  = new WaterLevelRegressor();
+    private final DbscanAnomalyDetector  dbscan     = new DbscanAnomalyDetector(1.0, 10);
+    private final BayesianNetwork        bayesNet   = new BayesianNetwork();
 
-    // -------------------------------------------------------------------------
-    // Training
-    // -------------------------------------------------------------------------
+    private boolean profileModelsTrained   = false;
+    private boolean travelTimeModelTrained = false;
+    private boolean regressorTrained       = false;
+
+    // ── Training ──────────────────────────────────────────────────────────────
 
     /**
-     * Trainiert das komplette Modell auf historischen Tagesprofilen.
-     * Gibt den Cross-Validation-Bericht auf der Konsole aus.
+     * Trainiert alle profilbasierten Modelle auf historischen Tagesprofilen.
+     * Muss vor assessRisk() aufgerufen werden.
      *
-     * @param profiles Historische, gelabelte Tagesprofile (aus flood_events + water_levels)
+     * Trainiert: KMeans, NaiveBayes, CrossValidator, DBSCAN, BayesianNetwork
+     *
+     * @param profiles Historische, gelabelte Tagesprofile
+     * @return CrossValidationResult für Reporting / Beleg
      */
-    public CrossValidationResult train(DailyProfile[] profiles) {
-        System.out.println("=== FloodPredictor Training ===");
+    public CrossValidationResult trainProfileModels(DailyProfile[] profiles) {
+        System.out.println("╔══════════════════════════════════════╗");
+        System.out.println("║   FloodPredictor – Profil-Training   ║");
+        System.out.println("╚══════════════════════════════════════╝");
         System.out.printf("Datensatz: %d Tagesprofile%n%n", profiles.length);
 
-        // Schritt 1: K-Means – unsupervised, zeigt natürliche Cluster in den Daten
-        System.out.println("--- K-Means Clustering ---");
+        System.out.println("─── 1/5  K-Means Clustering ───────────");
         kmeans.fit(profiles);
 
-        // Schritt 2: Naive Bayes – supervised, nutzt die Labels aus flood_events
-        System.out.println("\n--- Naive Bayes Training ---");
+        System.out.println("\n─── 2/5  Naive Bayes ──────────────────");
         naiveBayes.train(profiles);
 
-        // Schritt 3: Cross-Validation – bewertet die Modellgüte objektiv
-        System.out.println("\n--- 5-Fold Cross-Validation ---");
-        CrossValidationResult result = crossValidator.evaluate(profiles);
+        System.out.println("\n─── 3/5  Bayessches Netz ──────────────");
+        bayesNet.train(profiles);
 
-        trained = true;
-        System.out.println("=== Training abgeschlossen ===\n");
+        System.out.println("\n─── 4/5  DBSCAN Anomalie-Erkennung ────");
+        dbscan.fit(profiles);
+
+        System.out.println("\n─── 5/5  5-Fold Cross-Validation ──────");
+        CrossValidationResult cv = crossVal.evaluate(profiles);
+
+        profileModelsTrained = true;
+        System.out.println("\n✓ Profil-Modelle trainiert\n");
+        return cv;
+    }
+
+    /**
+     * Trainiert das Laufzeit-Modell auf stündlichen Zeitreihendaten.
+     * Kann unabhängig von trainProfileModels() aufgerufen werden.
+     *
+     * @param upstreamHourly   Stündliche Pegelstände Hradek (cm), zeitlich aligned
+     * @param goerlitzHourly   Stündliche Pegelstände Görlitz (cm)
+     */
+    public void trainTravelTimeModel(double[] upstreamHourly, double[] goerlitzHourly) {
+        System.out.println("─── Laufzeit-Modell (Kreuzkorrelation) ─");
+        travelTime.fit(upstreamHourly, goerlitzHourly);
+        travelTimeModelTrained = true;
+        System.out.println("✓ Laufzeit-Modell trainiert\n");
+    }
+
+    /**
+     * Trainiert den Pegel-Regressor auf historischen Stichproben.
+     * Jeder Sample enthält Features zum Zeitpunkt t und Zielwerte für t+6h/12h/24h.
+     *
+     * @param samples Trainings-Samples mit Ziel-Pegelständen
+     */
+    public void trainRegressor(RegressionSample[] samples) {
+        System.out.println("─── Pegel-Regression (6h / 12h / 24h) ─");
+        regressor.train(samples);
+        regressorTrained = true;
+        System.out.println("✓ Regressionsmodell trainiert\n");
+    }
+
+    // ── Vorhersage ────────────────────────────────────────────────────────────
+
+    /**
+     * Vollständige Risikoabschätzung für ein aktuelles Tagesprofil.
+     * Alle verfügbaren Modelle werden kombiniert.
+     *
+     * @param profile         Aktuelles Tagesprofil (ungelabelt)
+     * @param regressionSample Aktueller Messzeitpunkt für Regression (darf null sein)
+     * @return ComprehensiveResult mit allen Modell-Outputs und Ensemble-Entscheidung
+     */
+    public ComprehensiveResult assessRisk(DailyProfile profile,
+                                          RegressionSample regressionSample) {
+        if (!profileModelsTrained)
+            throw new IllegalStateException("trainProfileModels() muss zuerst aufgerufen werden.");
+
+        // ── Einzelmodelle ──────────────────────────────────────────────────
+        RiskLevel  kmeansLevel   = kmeans.predict(profile);
+        RiskLevel  nbLevel       = naiveBayes.predict(profile);
+        double[]   nbProbs       = naiveBayes.predictProbabilities(profile);
+        double[]   bayesProbs    = bayesNet.infer(profile);
+        RiskLevel  bayesLevel    = bayesNet.predict(profile);
+        boolean    isAnomaly     = dbscan.isAnomaly(profile);
+        int        dbscanCluster = dbscan.predict(profile);
+        String     anomalyDesc   = isAnomaly ? dbscan.describeAnomaly(profile) : null;
+
+        double travelHours = travelTimeModelTrained
+            ? travelTime.predictTravelHours(profile.upstreamMaxLevelCm())
+            : -1;
+        String travelDesc = travelTimeModelTrained
+            ? travelTime.describeArrival(profile.upstreamMaxLevelCm())
+            : "Laufzeit-Modell nicht trainiert";
+
+        LevelForecast forecast = (regressorTrained && regressionSample != null)
+            ? regressor.predict(regressionSample)
+            : null;
+
+        // ── Ensemble-Voting ────────────────────────────────────────────────
+        RiskLevel ensembleRisk = ensembleVote(kmeansLevel, nbLevel, bayesLevel, isAnomaly);
+
+        // ── Konfidenz: stimmen alle Hauptmodelle überein? ──────────────────
+        boolean highConfidence = kmeansLevel == nbLevel
+                              && nbLevel == bayesLevel
+                              && !isAnomaly;
+
+        return new ComprehensiveResult(
+            ensembleRisk, highConfidence,
+            nbLevel, nbProbs,
+            bayesLevel, bayesProbs,
+            kmeansLevel,
+            isAnomaly, dbscanCluster, anomalyDesc,
+            travelHours, travelDesc,
+            forecast
+        );
+    }
+
+    /** Vereinfachte Variante ohne Regression (für schnellen Echtzeit-Check). */
+    public ComprehensiveResult assessRisk(DailyProfile profile) {
+        return assessRisk(profile, null);
+    }
+
+    // ── Ensemble-Logik ────────────────────────────────────────────────────────
+
+    /**
+     * Gewichtetes Voting:
+     *   BayesNet   → 3 Punkte
+     *   NaiveBayes → 2 Punkte
+     *   KMeans     → 1 Punkt
+     *
+     * DBSCAN-Anomalie → Mindest-Risikolevel ERHOHT (Vorsichtsprinzip)
+     */
+    private static RiskLevel ensembleVote(RiskLevel kmeans, RiskLevel nb,
+                                           RiskLevel bayes, boolean anomaly) {
+        int[] votes = new int[RiskLevel.values().length];
+        votes[bayes.ordinal()] += 3;
+        votes[nb.ordinal()]    += 2;
+        votes[kmeans.ordinal()]+= 1;
+
+        int best = 0;
+        for (int i = 1; i < votes.length; i++) if (votes[i] > votes[best]) best = i;
+        RiskLevel result = RiskLevel.values()[best];
+
+        // Anomalie-Anhebung: unbekannte Ereignisse → mind. ERHOHT
+        if (anomaly && result == RiskLevel.NORMAL) return RiskLevel.ERHOHT;
         return result;
     }
 
-    // -------------------------------------------------------------------------
-    // Vorhersage
-    // -------------------------------------------------------------------------
+    // ── Ergebnis-Record ───────────────────────────────────────────────────────
 
     /**
-     * Bewertet das aktuelle Hochwasserrisiko für ein Tagesprofil.
-     *
-     * Die Risikostufe wird durch den Naive-Bayes-Klassifikator bestimmt.
-     * K-Means dient als Plausibilitätsprüfung – wenn beide Modelle
-     * übereinstimmen, ist die Vorhersage besonders zuverlässig.
-     *
-     * @param profile Aktuelles Tagesprofil (ungelabelt)
-     * @return PredictionResult mit Risikolevel und Wahrscheinlichkeiten
+     * Vollständiges Vorhersage-Ergebnis aller Modelle.
      */
-    public PredictionResult assessRisk(DailyProfile profile) {
-        checkTrained();
+    public record ComprehensiveResult(
+        RiskLevel ensembleRisk,        // Finale Ensemble-Entscheidung
+        boolean   highConfidence,      // Alle Modelle einig?
 
-        RiskLevel bayesLevel    = naiveBayes.predict(profile);
-        double[]  probabilities = naiveBayes.predictProbabilities(profile);
-        RiskLevel kmeansLevel   = kmeans.predict(profile);
+        RiskLevel nbRisk,              // Naive Bayes
+        double[]  nbProbabilities,     // [P(NORMAL), P(ERHOHT), P(GEFAHR)]
 
-        boolean modelsAgree = bayesLevel.equals(kmeansLevel);
+        RiskLevel bayesRisk,           // Bayessches Netz
+        double[]  bayesProbabilities,  // [P(NORMAL), P(ERHOHT), P(GEFAHR)]
 
-        return new PredictionResult(bayesLevel, probabilities, kmeansLevel, modelsAgree);
-    }
+        RiskLevel kmeansCluster,       // K-Means Cluster-Label
 
-    // -------------------------------------------------------------------------
-    // Ergebnis-Record
-    // -------------------------------------------------------------------------
+        boolean   isAnomaly,           // DBSCAN: unbekanntes Muster?
+        int       dbscanClusterId,     // DBSCAN Cluster-ID (-1 = Anomalie)
+        String    anomalyDescription,  // Welche Features sind auffällig?
 
-    /**
-     * Ergebnis einer Einzelvorhersage.
-     *
-     * @param riskLevel       Vorhergesagte Risikostufe (vom Naive Bayes)
-     * @param probabilities   Wahrscheinlichkeiten [P(NORMAL), P(ERHOHT), P(GEFAHR)]
-     * @param kmeansCluster   Cluster-Zuweisung durch K-Means (zur Validierung)
-     * @param highConfidence  true, wenn Naive Bayes und K-Means übereinstimmen
-     */
-    public record PredictionResult(
-        RiskLevel riskLevel,
-        double[] probabilities,
-        RiskLevel kmeansCluster,
-        boolean highConfidence
+        double    travelTimeHours,     // Wellen-Laufzeit von Hradek (-1 = unbekannt)
+        String    travelTimeDesc,      // Lesbare Beschreibung Ankunftszeit
+
+        LevelForecast levelForecast    // Pegelstand in 6h/12h/24h (null = nicht verfügbar)
     ) {
-        public double probabilityNormal() { return probabilities[0]; }
-        public double probabilityErhoht() { return probabilities[1]; }
-        public double probabilityGefahr() { return probabilities[2]; }
 
         @Override
         public String toString() {
-            return """
-                Risikostufe:  %s %s
-                P(NORMAL):    %.1f%%
-                P(ERHOHT):    %.1f%%
-                P(GEFAHR):    %.1f%%
-                K-Means:      %s
-                Konfidenz:    %s
-                """.formatted(
-                riskLevel,
-                emoji(riskLevel),
-                probabilityNormal() * 100,
-                probabilityErhoht() * 100,
-                probabilityGefahr() * 100,
-                kmeansCluster,
-                highConfidence ? "✅ Hoch (beide Modelle einig)" : "⚠️  Niedrig (Modelle uneinig)"
-            );
+            StringBuilder sb = new StringBuilder();
+            sb.append("╔══════════════════════════════════════════╗\n");
+            sb.append(String.format("║  Risiko: %-5s %-4s  Konfidenz: %-3s   ║%n",
+                ensembleRisk, emoji(ensembleRisk),
+                highConfidence ? "✅" : "⚠️ "));
+            sb.append("╠══════════════════════════════════════════╣\n");
+
+            sb.append(String.format("║  NaiveBayes: %-8s  "
+                + "P(G)=%.0f%%  P(E)=%.0f%%   ║%n",
+                nbRisk,
+                nbProbabilities[2] * 100,
+                nbProbabilities[1] * 100));
+
+            sb.append(String.format("║  BayesNet:   %-8s  "
+                + "P(G)=%.0f%%  P(E)=%.0f%%   ║%n",
+                bayesRisk,
+                bayesProbabilities[2] * 100,
+                bayesProbabilities[1] * 100));
+
+            sb.append(String.format("║  K-Means:    %-28s ║%n", kmeansCluster));
+
+            sb.append(String.format("║  DBSCAN:     %-28s ║%n",
+                isAnomaly ? "⚠️  ANOMALIE (Cluster " + dbscanClusterId + ")"
+                          : "Cluster " + dbscanClusterId));
+
+            sb.append(String.format("║  Laufzeit:   %-28s ║%n", travelTimeDesc));
+
+            if (levelForecast != null) {
+                sb.append("╠══════════════════════════════════════════╣\n");
+                sb.append(String.format("║  Pegel  6h: %5.0f cm  "
+                    + "12h: %5.0f cm  24h: %5.0f cm ║%n",
+                    levelForecast.level6h(),
+                    levelForecast.level12h(),
+                    levelForecast.level24h()));
+            }
+
+            if (isAnomaly && anomalyDescription != null) {
+                sb.append("╠══════════════════════════════════════════╣\n");
+                sb.append("║  ").append(anomalyDescription.replace("\n", "\n║  "));
+            }
+
+            sb.append("╚══════════════════════════════════════════╝");
+            return sb.toString();
         }
 
-        private static String emoji(RiskLevel level) {
-            return switch (level) {
-                case NORMAL -> "🟢";
-                case ERHOHT -> "🟡";
-                case GEFAHR -> "🔴";
-            };
+        private static String emoji(RiskLevel l) {
+            return switch (l) { case NORMAL -> "🟢"; case ERHOHT -> "🟡"; case GEFAHR -> "🔴"; };
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // Hilfsmethoden
-    // -------------------------------------------------------------------------
-
-    private void checkTrained() {
-        if (!trained) throw new IllegalStateException(
-            "FloodPredictor nicht trainiert – bitte zuerst train() aufrufen.");
     }
 }
