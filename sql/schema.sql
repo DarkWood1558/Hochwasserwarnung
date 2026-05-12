@@ -1,0 +1,81 @@
+-- Hochwasser-Fruehwarnung Neisse Goerlitz - DB-Schema
+
+-- Pegelstationen (deutsch + tschechisch)
+CREATE TABLE stations (
+    station_id   SERIAL PRIMARY KEY,
+    name         VARCHAR(100) NOT NULL,
+    country      VARCHAR(2)   NOT NULL,  -- 'DE' oder 'CZ'
+    river        VARCHAR(100) NOT NULL,
+    latitude     DOUBLE PRECISION,
+    longitude    DOUBLE PRECISION,
+    km_to_goerlitz DOUBLE PRECISION      -- Flussdistanz in km
+);
+
+-- Pegelstaende (Zeitreihe, partitioniert nach Jahr)
+CREATE TABLE water_levels (
+    station_id   INT          NOT NULL REFERENCES stations(station_id),
+    measured_at  TIMESTAMPTZ  NOT NULL,
+    level_cm     DOUBLE PRECISION NOT NULL,
+    source       VARCHAR(20),           -- 'HWND', 'CHMI', 'BFG'
+    PRIMARY KEY (station_id, measured_at)
+) PARTITION BY RANGE (measured_at);
+
+-- Partitionen
+CREATE TABLE water_levels_2024 PARTITION OF water_levels
+    FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+CREATE TABLE water_levels_2025 PARTITION OF water_levels
+    FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
+CREATE TABLE water_levels_2026 PARTITION OF water_levels
+    FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+
+-- Niederschlagsdaten (DWD)
+CREATE TABLE precipitation (
+    station_id   INT          NOT NULL,
+    measured_at  TIMESTAMPTZ  NOT NULL,
+    rainfall_mm  DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (station_id, measured_at)
+) PARTITION BY RANGE (measured_at);
+
+CREATE TABLE precipitation_2024 PARTITION OF precipitation
+    FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+CREATE TABLE precipitation_2025 PARTITION OF precipitation
+    FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
+CREATE TABLE precipitation_2026 PARTITION OF precipitation
+    FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+
+-- Historische Hochwasserereignisse (BfG)
+CREATE TABLE flood_events (
+    event_id     SERIAL PRIMARY KEY,
+    start_date   DATE NOT NULL,
+    end_date     DATE,
+    peak_level_cm DOUBLE PRECISION,
+    category     VARCHAR(20),           -- 'normal', 'erhoht', 'kritisch'
+    description  TEXT
+);
+
+-- Indizes fuer schnelle Zeitreihen-Abfragen
+CREATE INDEX idx_water_levels_time ON water_levels (measured_at DESC);
+CREATE INDEX idx_water_levels_station_time ON water_levels (station_id, measured_at DESC);
+
+-- View: gleitender Mittelwert + Anstiegsrate
+CREATE VIEW water_level_analysis AS
+SELECT
+    station_id,
+    measured_at,
+    level_cm,
+    AVG(level_cm) OVER (
+        PARTITION BY station_id
+        ORDER BY measured_at
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ) AS avg_7h,
+    level_cm - LAG(level_cm, 1) OVER (
+        PARTITION BY station_id ORDER BY measured_at
+    ) AS change_per_hour
+FROM water_levels;
+
+-- Beispieldaten: Stationen
+INSERT INTO stations (name, country, river, latitude, longitude, km_to_goerlitz) VALUES
+    ('Goerlitz',       'DE', 'Neisse', 51.1528, 14.9872, 0.0),
+    ('Zittau',         'DE', 'Neisse', 50.8965, 14.8076, 35.0),
+    ('Hradek nad Nisou','CZ', 'Nisa',  50.8600, 14.8400, 40.0),
+    ('Liberec',        'CZ', 'Nisa',  50.7671, 15.0562, 80.0);

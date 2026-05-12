@@ -1,0 +1,17 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: hochwasser_db
+    restart: always
+    environment:
+      POSTGRES_DB: hochwasser
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
