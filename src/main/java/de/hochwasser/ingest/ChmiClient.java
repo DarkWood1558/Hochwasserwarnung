@@ -67,7 +67,7 @@ public class ChmiClient {
         this.dbStationId = dbStationId;
         this.url = useHradek ? HRADEK_URL : LIBEREC_URL;
         this.http = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .followRedirects(HttpClient.Redirect.ALWAYS)
                 .build();
     }
 

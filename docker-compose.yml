@@ -4,14 +4,19 @@ services:
     container_name: hochwasser_db
     restart: always
     environment:
-      POSTGRES_DB: hochwasser
-      POSTGRES_USER: postgres
+      POSTGRES_DB:       hochwasser
+      POSTGRES_USER:     postgres
       POSTGRES_PASSWORD: password
     ports:
       - "5432:5432"
     volumes:
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hochwasser"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   postgres_data:

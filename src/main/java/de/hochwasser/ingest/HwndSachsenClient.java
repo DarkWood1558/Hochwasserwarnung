@@ -1,9 +1,5 @@
 package de.hochwasser.ingest;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import de.hochwasser.model.WaterLevel;
 
 import java.net.URI;
