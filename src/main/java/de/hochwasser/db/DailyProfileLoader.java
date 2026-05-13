@@ -158,22 +158,28 @@ public class DailyProfileLoader {
      *   8  stationId          (WHERE main.station_id = ?)
      */
     private static final String MAIN_QUERY = """
-        WITH daily_levels AS (
+        WITH raw_rates AS (
             SELECT
                 (measured_at AT TIME ZONE 'Europe/Berlin')::date   AS day,
                 station_id,
-                MAX(level_cm)                                      AS max_level_cm,
-                AVG(level_cm)                                      AS avg_level_cm,
-                MAX(ABS(
-                    level_cm - LAG(level_cm) OVER (
-                        PARTITION BY station_id
-                        ORDER BY measured_at
-                    )
-                ))                                                 AS max_rate_cm_h
+                level_cm,
+                ABS(level_cm - LAG(level_cm) OVER (
+                    PARTITION BY station_id
+                    ORDER BY measured_at
+                )) AS rate_cm_h
             FROM water_levels
             WHERE station_id IN (?, ?)
               AND measured_at >= ?
               AND measured_at <  ?
+        ),
+        daily_levels AS (
+            SELECT
+                day,
+                station_id,
+                MAX(level_cm)  AS max_level_cm,
+                AVG(level_cm)  AS avg_level_cm,
+                MAX(rate_cm_h) AS max_rate_cm_h
+            FROM raw_rates
             GROUP BY day, station_id
         ),
         daily_precip AS (

@@ -27,11 +27,11 @@ public class PredictorTrainingRunner {
             // 2. Load Profiles for Training
             var loader = new DailyProfileLoader(db.getConnection());
             System.out.println("Lade historische Daten für das Training...");
-            
+
             // Wir laden Daten von 2002 bis heute für Görlitz (ID 1) mit Hrádek (ID 3)
-            DailyProfile[] profiles = loader.loadForTraining(1, 3, 
-                LocalDate.of(2002, 1, 1), LocalDate.now());
-            
+            DailyProfile[] profiles = loader.loadForTraining(1, 3,
+                    LocalDate.of(2002, 1, 1), LocalDate.now());
+
             if (profiles.length == 0) {
                 System.err.println("Keine Trainingsdaten gefunden! Stellen Sie sicher, dass water_levels Daten vorhanden sind.");
                 return;
@@ -42,7 +42,7 @@ public class PredictorTrainingRunner {
             var predictor = new FloodPredictor();
             System.out.println("Starte Training der Profil-Modelle (Bayesian Network, Naive Bayes, K-Means)...");
             var result = predictor.trainProfileModels(profiles);
-            
+
             System.out.println("\n--- Kreuzvalidierungsergebnisse ---");
             System.out.println(result.toString());
 
@@ -58,14 +58,37 @@ public class PredictorTrainingRunner {
 
     private static void seedHistoricalData(DatabaseManager db) {
         String sqlFile = "sql/seed_historical_data.sql";
-        try (Statement stmt = db.getConnection().createStatement()) {
-            System.out.println("Führe Seed-Skript aus: " + sqlFile);
+        System.out.println("Führe Seed-Skript aus: " + sqlFile);
+        try {
             String content = new String(Files.readAllBytes(Paths.get(sqlFile)));
-            stmt.execute(content);
-            db.getConnection().commit();
-            System.out.println("✅ Historische Ereignisse erfolgreich in die DB geladen.");
+
+            // PostgreSQL-JDBC erlaubt KEIN Multi-Statement in einem execute()-Aufruf.
+            // Daher: nach Semikolon splitten und jeden Statement einzeln ausführen.
+            String[] statements = content.split(";");
+
+            try (Statement stmt = db.getConnection().createStatement()) {
+                int count = 0;
+                for (String raw : statements) {
+                    // Kommentarzeilen (-- ...) und Leerzeilen entfernen
+                    String trimmed = raw.replaceAll("(?m)^\s*--[^\n]*", "").strip();
+                    if (trimmed.isEmpty()) continue;
+
+                    try {
+                        stmt.execute(trimmed);
+                        count++;
+                    } catch (Exception stmtEx) {
+                        // Einzelnen fehlgeschlagenen Statement loggen, aber weitermachen
+                        // (z.B. "table already exists" bei CREATE TABLE IF NOT EXISTS)
+                        System.err.printf("  ⚠️  Statement %d übersprungen: %s%n",
+                                count + 1, stmtEx.getMessage().lines().findFirst().orElse("?"));
+                    }
+                }
+                db.getConnection().commit();
+                System.out.printf("✅ Seed abgeschlossen: %d Statements ausgeführt.%n", count);
+            }
         } catch (Exception e) {
             System.err.println("⚠️ Warnung beim Seeding: " + e.getMessage());
+            try { db.getConnection().rollback(); } catch (Exception ignored) {}
         }
     }
 }
