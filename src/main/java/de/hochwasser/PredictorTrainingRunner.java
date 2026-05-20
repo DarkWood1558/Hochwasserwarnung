@@ -46,6 +46,16 @@ public class PredictorTrainingRunner {
 
             // 4. Train Travel Time & Regressor (optional mit Mock-Daten falls Zeitreihen fehlen)
             // In einer echten Umgebung würden hier die rohen Zeitreihen geladen werden.
+            
+            // 5. Generiere eine Test-Vorhersage für heute (für das Dashboard)
+            System.out.println("\nErstelle Test-Vorhersage für das Dashboard...");
+            if (profiles.length > 0) {
+                var lastProfile = profiles[profiles.length - 1];
+                var prediction = predictor.assessRisk(lastProfile);
+                db.insertPrediction(1, prediction);
+                System.out.println("✅ Test-Vorhersage gespeichert.");
+            }
+
             System.out.println("\nTraining abgeschlossen.");
 
         } catch (Exception e) {

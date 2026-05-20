@@ -2,10 +2,27 @@
 -- Historische Hochwasserereignisse – Neiße / Görlitz
 -- Quelle: BfG Gewässerkundliches Jahrbuch, HWND Sachsen
 -- ============================================================
--- Fix: Kein CREATE TABLE hier – die Tabelle wird in schema.sql
--- angelegt. Stattdessen sicherstellen dass dbscan_cluster-Spalte
--- existiert (falls schema.sql aus älterer Version stammt).
--- ============================================================
+
+-- Sicherstellen, dass die Tabelle existiert (falls schema.sql nicht neu eingelesen wurde)
+CREATE TABLE IF NOT EXISTS predictions (
+    prediction_id   SERIAL PRIMARY KEY,
+    station_id      INT REFERENCES stations(station_id),
+    for_date        DATE        NOT NULL,
+    predicted_at    TIMESTAMPTZ DEFAULT NOW(),
+    risk_level      VARCHAR(20),
+    p_normal        DOUBLE PRECISION,
+    p_erhoht        DOUBLE PRECISION,
+    p_gefahr        DOUBLE PRECISION,
+    level_6h_cm     DOUBLE PRECISION,
+    level_12h_cm    DOUBLE PRECISION,
+    level_24h_cm    DOUBLE PRECISION,
+    travel_hours    DOUBLE PRECISION,
+    is_anomaly      BOOLEAN DEFAULT FALSE,
+    dbscan_cluster  INT,
+    high_confidence BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictions_date ON predictions (for_date DESC, station_id);
 
 ALTER TABLE predictions
     ADD COLUMN IF NOT EXISTS dbscan_cluster INT;

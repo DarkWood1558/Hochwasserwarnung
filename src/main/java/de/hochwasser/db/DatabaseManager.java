@@ -53,6 +53,46 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
+    public void insertPrediction(int stationId, de.hochwasser.analysis.FloodPredictor.ComprehensiveResult res) throws SQLException {
+        String sql = """
+            INSERT INTO predictions (
+                station_id, for_date, risk_level, 
+                p_normal, p_erhoht, p_gefahr, 
+                level_6h_cm, level_12h_cm, level_24h_cm,
+                travel_hours, is_anomaly, high_confidence
+            ) VALUES (?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """;
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, stationId);
+            ps.setString(2, res.ensembleRisk().name());
+            ps.setDouble(3, res.nbProbabilities()[0]);
+            ps.setDouble(4, res.nbProbabilities()[1]);
+            ps.setDouble(5, res.nbProbabilities()[2]);
+            
+            if (res.levelForecast() != null) {
+                ps.setDouble(6, res.levelForecast().level6h());
+                ps.setDouble(7, res.levelForecast().level12h());
+                ps.setDouble(8, res.levelForecast().level24h());
+            } else {
+                ps.setNull(6, java.sql.Types.DOUBLE);
+                ps.setNull(7, java.sql.Types.DOUBLE);
+                ps.setNull(8, java.sql.Types.DOUBLE);
+            }
+            
+            if (res.travelTimeHours() >= 0) {
+                ps.setDouble(9, res.travelTimeHours());
+            } else {
+                ps.setNull(9, java.sql.Types.DOUBLE);
+            }
+            
+            ps.setBoolean(10, res.isAnomaly());
+            ps.setBoolean(11, res.highConfidence());
+            ps.executeUpdate();
+            connection.commit();
+        }
+    }
+
     public Connection getConnection() {
         return connection;
     }

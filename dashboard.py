@@ -412,8 +412,8 @@ with tabs[3]:
             "Typ":          ["Clustering", "Klassifikation","Kausal",          "Anomalie",        "Regression", "Zeitreihe",       "Kombination"],
             "Ergebnis":     [risk,          risk,           risk,
                              "⚠️ Anomalie" if pred.get("is_anomaly") else "✅ Normal",
-                             f"{pred.get('level_24h_cm',0):.0f} cm (24h)",
-                             f"{pred.get('travel_hours',0):.0f}h Laufzeit" if pred.get("travel_hours") else "–",
+                             f"{pred.get('level_24h_cm') or 0:.0f} cm (24h)",
+                             f"{pred.get('travel_hours') or 0:.0f}h Laufzeit" if pred.get("travel_hours") else "–",
                              risk],
             "Gewicht":      ["1×",         "2×",           "3×",              "Veto bei Anomalie","–",         "–",               "—"],
         }

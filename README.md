@@ -63,22 +63,19 @@ db.password=password
 
 ### 3. Anwendung bauen und starten
 
-Verwenden Sie Maven, um das Projekt zu bauen:
+Das automatisierte Start-Skript führt nacheinander den Daten-Ingest, das Modell-Training und schließlich das Dashboard aus:
 
 ```bash
-mvn clean install
+chmod +x run.sh
+./run.sh
 ```
 
-Starten Sie die Anwendung über die Profile in der `pom.xml`:
+Das Skript prüft alle Voraussetzungen (Docker, Java, Maven, Python), startet die Datenbank, baut das Projekt, erstellt ein Python Virtual Environment für das Dashboard und startet die Pipeline.
 
-**Daten-Ingest (Aktuelle Pegel abrufen):**
+### Python Abhängigkeiten
+Falls das Skript beim Erstellen des Virtual Environments fehlschlägt, stellen Sie sicher, dass `python3-venv` installiert ist:
 ```bash
-mvn exec:java -Pingest
-```
-
-**Training des FloodPredictors (Inkl. Seed der historischen Daten):**
-```bash
-mvn exec:java -Ptrain
+sudo apt install python3-venv
 ```
 
 ## Datenbank-Schema Highlights
