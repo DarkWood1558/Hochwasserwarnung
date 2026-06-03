@@ -30,6 +30,13 @@
             <artifactId>gson</artifactId>
             <version>2.11.0</version>
         </dependency>
+
+        <dependency>
+            <groupId>com.github.haifengl</groupId>
+            <artifactId>smile-core</artifactId>
+            <version>4.3.0</version>
+        </dependency>
+        
     </dependencies>
 
     <build>

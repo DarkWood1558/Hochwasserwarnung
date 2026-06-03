@@ -28,6 +28,16 @@ import de.hochwasser.model.DailyProfile;
  *
  * Bei erkannter Anomalie (DBSCAN) wird das Risikolevel mindestens auf
  * ERHOHT angehoben – unbekannte Ereignisse sind immer verdächtig.
+ *
+ * ── FIX 4: highConfidence ────────────────────────────────────────────────────
+ * Vorher: highConfidence = false sobald isAnomaly = true, auch wenn alle
+ *         drei Hauptmodelle übereinstimmten. Das führte dazu, dass die
+ *         Konfidenz dauerhaft "Gering" war, weil DBSCAN bei Normalpegeln
+ *         (wenig Trainingsdaten) fast immer Anomalie meldete.
+ *
+ * Jetzt:  highConfidence basiert nur auf der Übereinstimmung der drei
+ *         Hauptmodelle (KMeans, NaiveBayes, BayesNet). isAnomaly ist ein
+ *         separates Warnsignal im Dashboard – kein Konfidenz-Veto.
  */
 public class FloodPredictor {
 
@@ -88,10 +98,6 @@ public class FloodPredictor {
 
     /**
      * Trainiert das Laufzeit-Modell auf stündlichen Zeitreihendaten.
-     * Kann unabhängig von trainProfileModels() aufgerufen werden.
-     *
-     * @param upstreamHourly   Stündliche Pegelstände Hradek (cm), zeitlich aligned
-     * @param goerlitzHourly   Stündliche Pegelstände Görlitz (cm)
      */
     public void trainTravelTimeModel(double[] upstreamHourly, double[] goerlitzHourly) {
         System.out.println("─── Laufzeit-Modell (Kreuzkorrelation) ─");
@@ -102,9 +108,6 @@ public class FloodPredictor {
 
     /**
      * Trainiert den Pegel-Regressor auf historischen Stichproben.
-     * Jeder Sample enthält Features zum Zeitpunkt t und Zielwerte für t+6h/12h/24h.
-     *
-     * @param samples Trainings-Samples mit Ziel-Pegelständen
      */
     public void trainRegressor(RegressionSample[] samples) {
         System.out.println("─── Pegel-Regression (6h / 12h / 24h) ─");
@@ -117,11 +120,6 @@ public class FloodPredictor {
 
     /**
      * Vollständige Risikoabschätzung für ein aktuelles Tagesprofil.
-     * Alle verfügbaren Modelle werden kombiniert.
-     *
-     * @param profile         Aktuelles Tagesprofil (ungelabelt)
-     * @param regressionSample Aktueller Messzeitpunkt für Regression (darf null sein)
-     * @return ComprehensiveResult mit allen Modell-Outputs und Ensemble-Entscheidung
      */
     public ComprehensiveResult assessRisk(DailyProfile profile,
                                           RegressionSample regressionSample) {
@@ -139,32 +137,33 @@ public class FloodPredictor {
         String     anomalyDesc   = isAnomaly ? dbscan.describeAnomaly(profile) : null;
 
         double travelHours = travelTimeModelTrained
-            ? travelTime.predictTravelHours(profile.upstreamMaxLevelCm())
-            : -1;
+                ? travelTime.predictTravelHours(profile.upstreamMaxLevelCm())
+                : -1;
         String travelDesc = travelTimeModelTrained
-            ? travelTime.describeArrival(profile.upstreamMaxLevelCm())
-            : "Laufzeit-Modell nicht trainiert";
+                ? travelTime.describeArrival(profile.upstreamMaxLevelCm())
+                : "Laufzeit-Modell nicht trainiert";
 
         LevelForecast forecast = (regressorTrained && regressionSample != null)
-            ? regressor.predict(regressionSample)
-            : null;
+                ? regressor.predict(regressionSample)
+                : null;
 
         // ── Ensemble-Voting ────────────────────────────────────────────────
         RiskLevel ensembleRisk = ensembleVote(kmeansLevel, nbLevel, bayesLevel, isAnomaly);
 
-        // ── Konfidenz: stimmen alle Hauptmodelle überein? ──────────────────
+        // ── FIX 4: Konfidenz basiert NUR auf Modell-Übereinstimmung ───────
+        // isAnomaly ist ein separates Warnsignal, kein Konfidenz-Veto.
+        // Vorher: && !isAnomaly → führte zu dauerhaft "Gering" bei Normalpegeln
         boolean highConfidence = kmeansLevel == nbLevel
-                              && nbLevel == bayesLevel
-                              && !isAnomaly;
+                && nbLevel == bayesLevel;
 
         return new ComprehensiveResult(
-            ensembleRisk, highConfidence,
-            nbLevel, nbProbs,
-            bayesLevel, bayesProbs,
-            kmeansLevel,
-            isAnomaly, dbscanCluster, anomalyDesc,
-            travelHours, travelDesc,
-            forecast
+                ensembleRisk, highConfidence,
+                nbLevel, nbProbs,
+                bayesLevel, bayesProbs,
+                kmeansLevel,
+                isAnomaly, dbscanCluster, anomalyDesc,
+                travelHours, travelDesc,
+                forecast
         );
     }
 
@@ -184,7 +183,7 @@ public class FloodPredictor {
      * DBSCAN-Anomalie → Mindest-Risikolevel ERHOHT (Vorsichtsprinzip)
      */
     private static RiskLevel ensembleVote(RiskLevel kmeans, RiskLevel nb,
-                                           RiskLevel bayes, boolean anomaly) {
+                                          RiskLevel bayes, boolean anomaly) {
         int[] votes = new int[RiskLevel.values().length];
         votes[bayes.ordinal()] += 3;
         votes[nb.ordinal()]    += 2;
@@ -201,29 +200,26 @@ public class FloodPredictor {
 
     // ── Ergebnis-Record ───────────────────────────────────────────────────────
 
-    /**
-     * Vollständiges Vorhersage-Ergebnis aller Modelle.
-     */
     public record ComprehensiveResult(
-        RiskLevel ensembleRisk,        // Finale Ensemble-Entscheidung
-        boolean   highConfidence,      // Alle Modelle einig?
+            RiskLevel ensembleRisk,
+            boolean   highConfidence,
 
-        RiskLevel nbRisk,              // Naive Bayes
-        double[]  nbProbabilities,     // [P(NORMAL), P(ERHOHT), P(GEFAHR)]
+            RiskLevel nbRisk,
+            double[]  nbProbabilities,
 
-        RiskLevel bayesRisk,           // Bayessches Netz
-        double[]  bayesProbabilities,  // [P(NORMAL), P(ERHOHT), P(GEFAHR)]
+            RiskLevel bayesRisk,
+            double[]  bayesProbabilities,
 
-        RiskLevel kmeansCluster,       // K-Means Cluster-Label
+            RiskLevel kmeansCluster,
 
-        boolean   isAnomaly,           // DBSCAN: unbekanntes Muster?
-        int       dbscanClusterId,     // DBSCAN Cluster-ID (-1 = Anomalie)
-        String    anomalyDescription,  // Welche Features sind auffällig?
+            boolean   isAnomaly,
+            int       dbscanClusterId,
+            String    anomalyDescription,
 
-        double    travelTimeHours,     // Wellen-Laufzeit von Hradek (-1 = unbekannt)
-        String    travelTimeDesc,      // Lesbare Beschreibung Ankunftszeit
+            double    travelTimeHours,
+            String    travelTimeDesc,
 
-        LevelForecast levelForecast    // Pegelstand in 6h/12h/24h (null = nicht verfügbar)
+            LevelForecast levelForecast
     ) {
 
         @Override
@@ -231,37 +227,37 @@ public class FloodPredictor {
             StringBuilder sb = new StringBuilder();
             sb.append("╔══════════════════════════════════════════╗\n");
             sb.append(String.format("║  Risiko: %-5s %-4s  Konfidenz: %-3s   ║%n",
-                ensembleRisk, emoji(ensembleRisk),
-                highConfidence ? "✅" : "⚠️ "));
+                    ensembleRisk, emoji(ensembleRisk),
+                    highConfidence ? "✅" : "⚠️ "));
             sb.append("╠══════════════════════════════════════════╣\n");
 
             sb.append(String.format("║  NaiveBayes: %-8s  "
-                + "P(G)=%.0f%%  P(E)=%.0f%%   ║%n",
-                nbRisk,
-                nbProbabilities[2] * 100,
-                nbProbabilities[1] * 100));
+                            + "P(G)=%.0f%%  P(E)=%.0f%%   ║%n",
+                    nbRisk,
+                    nbProbabilities[2] * 100,
+                    nbProbabilities[1] * 100));
 
             sb.append(String.format("║  BayesNet:   %-8s  "
-                + "P(G)=%.0f%%  P(E)=%.0f%%   ║%n",
-                bayesRisk,
-                bayesProbabilities[2] * 100,
-                bayesProbabilities[1] * 100));
+                            + "P(G)=%.0f%%  P(E)=%.0f%%   ║%n",
+                    bayesRisk,
+                    bayesProbabilities[2] * 100,
+                    bayesProbabilities[1] * 100));
 
             sb.append(String.format("║  K-Means:    %-28s ║%n", kmeansCluster));
 
             sb.append(String.format("║  DBSCAN:     %-28s ║%n",
-                isAnomaly ? "⚠️  ANOMALIE (Cluster " + dbscanClusterId + ")"
-                          : "Cluster " + dbscanClusterId));
+                    isAnomaly ? "⚠️  ANOMALIE (Cluster " + dbscanClusterId + ")"
+                            : "Cluster " + dbscanClusterId));
 
             sb.append(String.format("║  Laufzeit:   %-28s ║%n", travelTimeDesc));
 
             if (levelForecast != null) {
                 sb.append("╠══════════════════════════════════════════╣\n");
                 sb.append(String.format("║  Pegel  6h: %5.0f cm  "
-                    + "12h: %5.0f cm  24h: %5.0f cm ║%n",
-                    levelForecast.level6h(),
-                    levelForecast.level12h(),
-                    levelForecast.level24h()));
+                                + "12h: %5.0f cm  24h: %5.0f cm ║%n",
+                        levelForecast.level6h(),
+                        levelForecast.level12h(),
+                        levelForecast.level24h()));
             }
 
             if (isAnomaly && anomalyDescription != null) {

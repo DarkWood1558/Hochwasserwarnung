@@ -45,7 +45,7 @@ public class DatabaseManager implements AutoCloseable {
             for (WaterLevel wl : rainfall) {
                 ps.setInt(1, wl.stationId());
                 ps.setTimestamp(2, Timestamp.from(wl.measuredAt()));
-                ps.setDouble(3, wl.levelCm()); // rainfall_mm is stored in levelCm in the record
+                ps.setDouble(3, wl.levelCm());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -53,23 +53,47 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
-    public void insertPrediction(int stationId, de.hochwasser.analysis.FloodPredictor.ComprehensiveResult res) throws SQLException {
+    /**
+     * FIX 1: Speichert jetzt Ensemble-Wahrscheinlichkeiten statt nur NaiveBayes-Probs.
+     *
+     * Vorher: p_normal/p_erhoht/p_gefahr kamen aus res.nbProbabilities() –
+     *         das führte zum Widerspruch "ERHOHT" aber "NORMAL 100%".
+     *
+     * Jetzt: Ensemble-Wahrscheinlichkeit = gewichteter Mittelwert aus
+     *        NaiveBayes (Gewicht 2) und BayesNet (Gewicht 3), identisch
+     *        zur Ensemble-Voting-Logik in FloodPredictor.
+     *        Damit stimmen risk_level und p_* immer überein.
+     */
+    public void insertPrediction(int stationId,
+                                 de.hochwasser.analysis.FloodPredictor.ComprehensiveResult res)
+            throws SQLException {
+
+        // Ensemble-Wahrscheinlichkeiten: gewichteter Mittelwert NB(2) + BayesNet(3)
+        double[] nb    = res.nbProbabilities();
+        double[] bayes = res.bayesProbabilities();
+        double totalWeight = 5.0; // 2 + 3
+
+        double pNormal = (nb[0] * 2 + bayes[0] * 3) / totalWeight;
+        double pErhoht = (nb[1] * 2 + bayes[1] * 3) / totalWeight;
+        double pGefahr = (nb[2] * 2 + bayes[2] * 3) / totalWeight;
+
         String sql = """
             INSERT INTO predictions (
-                station_id, for_date, risk_level, 
-                p_normal, p_erhoht, p_gefahr, 
+                station_id, for_date, risk_level,
+                p_normal, p_erhoht, p_gefahr,
                 level_6h_cm, level_12h_cm, level_24h_cm,
                 travel_hours, is_anomaly, high_confidence
             ) VALUES (?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
             """;
 
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, stationId);
             ps.setString(2, res.ensembleRisk().name());
-            ps.setDouble(3, res.nbProbabilities()[0]);
-            ps.setDouble(4, res.nbProbabilities()[1]);
-            ps.setDouble(5, res.nbProbabilities()[2]);
-            
+            ps.setDouble(3, pNormal);
+            ps.setDouble(4, pErhoht);
+            ps.setDouble(5, pGefahr);
+
             if (res.levelForecast() != null) {
                 ps.setDouble(6, res.levelForecast().level6h());
                 ps.setDouble(7, res.levelForecast().level12h());
@@ -79,13 +103,13 @@ public class DatabaseManager implements AutoCloseable {
                 ps.setNull(7, java.sql.Types.DOUBLE);
                 ps.setNull(8, java.sql.Types.DOUBLE);
             }
-            
+
             if (res.travelTimeHours() >= 0) {
                 ps.setDouble(9, res.travelTimeHours());
             } else {
                 ps.setNull(9, java.sql.Types.DOUBLE);
             }
-            
+
             ps.setBoolean(10, res.isAnomaly());
             ps.setBoolean(11, res.highConfidence());
             ps.executeUpdate();

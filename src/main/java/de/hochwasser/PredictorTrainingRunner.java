@@ -46,12 +46,31 @@ public class PredictorTrainingRunner {
 
             // 4. Train Travel Time & Regressor (optional mit Mock-Daten falls Zeitreihen fehlen)
             // In einer echten Umgebung würden hier die rohen Zeitreihen geladen werden.
+            System.out.println("Trainiere Regressionsmodell...");
+            RegressionSample[] samples = new RegressionSample[profiles.length];
+            for (int i = 0; i < profiles.length; i++) {
+                // Wir nutzen die Profile als Basis für Samples
+                samples[i] = new RegressionSample(
+                    profiles[i].maxLevelCm(),
+                    profiles[i].maxRateOfChangeCmH(),
+                    profiles[i].upstreamMaxLevelCm(),
+                    profiles[i].totalPrecipMm(),
+                    profiles[i].date().atStartOfDay(),
+                    new double[]{
+                        profiles[i].maxLevelCm() * 1.05, // Dummy-Werte für Target
+                        profiles[i].maxLevelCm() * 1.1,
+                        profiles[i].maxLevelCm() * 1.2
+                    }
+                );
+            }
+            predictor.trainRegressor(samples);
             
             // 5. Generiere eine Test-Vorhersage für heute (für das Dashboard)
             System.out.println("\nErstelle Test-Vorhersage für das Dashboard...");
             if (profiles.length > 0) {
                 var lastProfile = profiles[profiles.length - 1];
-                var prediction = predictor.assessRisk(lastProfile);
+                var lastSample = samples[samples.length - 1];
+                var prediction = predictor.assessRisk(lastProfile, lastSample);
                 db.insertPrediction(1, prediction);
                 System.out.println("✅ Test-Vorhersage gespeichert.");
             }
