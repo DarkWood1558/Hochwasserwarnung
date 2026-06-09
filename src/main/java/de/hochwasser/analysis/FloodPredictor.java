@@ -47,8 +47,8 @@ public class FloodPredictor {
 
     // ── Modelle ───────────────────────────────────────────────────────────────
 
-    private final KMeansClusterer        kmeans     = new KMeansClusterer(3, 200, 42L);
-    private final NaiveBayesPredictor    naiveBayes = new NaiveBayesPredictor();
+    private final SmileKMeansClusterer   kmeans     = new SmileKMeansClusterer(3);
+    private final SmileNaiveBayesPredictor naiveBayes = new SmileNaiveBayesPredictor();
     private final CrossValidator         crossVal   = new CrossValidator(5, 42L);
     private final WaveTravelTimeModel    travelTime = new WaveTravelTimeModel();
     private final WaterLevelRegressor    regressor  = new WaterLevelRegressor();
